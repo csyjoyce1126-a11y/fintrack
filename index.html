@@ -243,7 +243,7 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
   <div class="topbar">
     <div class="topbar-title" id="page-title">Dashboard</div>
     <div class="topbar-right">
-      <span id="sync-dot" class="sync-dot" title="Sync status"></span>
+      <span id="sync-dot" class="sync-dot" title="Sync status" onclick="manualSync()" style="cursor:pointer;"></span>
       <span id="sync-label" style="font-size:11px;color:var(--ink-3);">Synced</span>
       <div style="display:flex;align-items:center;gap:4px;">
         <button class="month-btn" onclick="changeMonth(-1)">‹</button>
@@ -444,11 +444,13 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
         <div class="frow">
           <div><label>Apps Script Web App URL</label><input type="url" id="gs-url" placeholder="https://script.google.com/macros/s/…/exec"/></div>
         </div>
-        <div style="display:flex;gap:8px;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-primary" onclick="saveGsUrl()"><i class="ti ti-check"></i>Save & Test</button>
+          <button class="btn btn-ghost" onclick="manualSync()"><i class="ti ti-refresh"></i>Sync now</button>
           <button class="btn btn-ghost" onclick="clearGsUrl()">Clear</button>
         </div>
         <div id="gs-status" style="margin-top:10px;font-size:13px;"></div>
+        <div id="queue-status" style="margin-top:8px;font-size:12px;color:var(--amber);display:none;"></div>
       </div>
       <div class="card mb">
         <div class="section-title" style="margin-bottom:10px;">Your Profile</div>
@@ -547,16 +549,24 @@ function L6(){ const r=[];for(let i=5;i>=0;i--){let m=curMonth-i,y=curYear;if(m<
 function monthIncome(k){ return SALARY+(getInc(k)).reduce((s,e)=>s+e.amount,0); }
 function monthTotal(k){  return getExp(k).reduce((s,e)=>s+e.amount,0); }
 function monthSaved(k){
-  // Only calculate savings for months that have at least one real expense entered
-  const hasReal = k>=START_MONTH && (getExp(k).some(e=>!e.recurringId)||getInc(k).length>0);
-  if(!hasReal) return 0;
+  // Always calculate for current month
+  // For past months, only calculate if real data was entered (not just recurring auto-fill)
+  const isCurrentMonth = k === mkey(new Date().getFullYear(), new Date().getMonth());
+  const hasReal = getExp(k).some(e=>!e.recurringId) || getInc(k).length>0;
+  if(!isCurrentMonth && k < START_MONTH) return 0;
+  if(!isCurrentMonth && !hasReal) return 0;
   return monthIncome(k)-monthTotal(k);
 }
 function savingsRate(k){ const i=monthIncome(k);return i>0?Math.round(monthSaved(k)/i*100):0; }
 // Only count months from Jun 2026 that have at least one real (non-recurring) entry
 const START_MONTH = '2026-06';
 function activeMonths(){
-  return Object.keys(expenses).filter(k=>k>=START_MONTH && expenses[k].some(e=>!e.recurringId));
+  const curKey = mkey(new Date().getFullYear(), new Date().getMonth());
+  return Object.keys(expenses).filter(k => {
+    if(k < START_MONTH) return false;
+    if(k === curKey) return true; // always include current month
+    return expenses[k].some(e=>!e.recurringId); // past months need real data
+  });
 }
 function allTimeSaved(){ const ks=activeMonths(); return ks.length?ks.reduce((t,k)=>t+monthSaved(k),0):0; }
 function avgMonthlySaved(){ const ks=activeMonths();if(!ks.length)return MONTHLY_TARGET;return Math.round(ks.reduce((s,k)=>s+monthSaved(k),0)/ks.length); }
@@ -608,52 +618,124 @@ function clearGsUrl(){
 }
 
 // ═══════════════════════════════════════════════════════════
-// SYNC — Google Sheets via Apps Script
+// SYNC ENGINE — reliable queue + URL-param method (no CORS issues)
 // ═══════════════════════════════════════════════════════════
-function setSyncStatus(s){
-  const dot=document.getElementById('sync-dot'), lbl=document.getElementById('sync-label');
-  dot.className='sync-dot'; lbl.textContent='';
-  if(s==='syncing'){ dot.classList.add('syncing'); lbl.textContent='Syncing…'; }
-  else if(s==='ok'){ dot.style.background='var(--green)'; lbl.textContent='Synced'; }
-  else if(s==='error'){ dot.classList.add('error'); lbl.textContent='Sync error'; }
-  else { dot.style.background='#ccc'; lbl.textContent='Offline'; }
+
+// Pending write queue — survives page navigation
+let syncQueue = JSON.parse(localStorage.getItem('jft_queue')||'[]');
+let isSyncing = false;
+let autoSyncTimer = null;
+
+function setSyncStatus(s, detail=''){
+  const dot=document.getElementById('sync-dot');
+  const lbl=document.getElementById('sync-label');
+  if(!dot) return;
+  dot.className='sync-dot';
+  if(s==='syncing'){ dot.classList.add('syncing'); if(lbl) lbl.textContent='Syncing…'; }
+  else if(s==='ok'){  dot.style.background='var(--green)'; if(lbl) lbl.textContent=detail||'Synced'; }
+  else if(s==='pending'){ dot.style.background='var(--amber)'; if(lbl) lbl.textContent=`${syncQueue.length} pending`; }
+  else if(s==='error'){ dot.classList.add('error'); if(lbl) lbl.textContent='Sync error — will retry'; }
+  else { dot.style.background='#ccc'; if(lbl) lbl.textContent='Offline'; }
 }
 
+function saveQueue(){ localStorage.setItem('jft_queue', JSON.stringify(syncQueue)); }
+
+// Apps Script GET — standard fetch, works fine for reads
 async function gsGet(){
   if(!GS_URL) return null;
   setSyncStatus('syncing');
   try{
-    const r = await fetch(GS_URL);
+    // Add cache-buster so mobile Safari doesn't serve stale response
+    const url = GS_URL + (GS_URL.includes('?')?'&':'?') + 'cb=' + Date.now();
+    const r = await fetch(url, { cache:'no-store' });
     const d = await r.json();
     if(d.ok){ setSyncStatus('ok'); return d.data; }
     setSyncStatus('error'); return null;
   }catch(e){ setSyncStatus('error'); return null; }
 }
 
-async function gsPost(action, sheet, row, id){
-  if(!GS_URL) return;
-  setSyncStatus('syncing');
+// Apps Script POST — encode payload as URL param to sidestep CORS preflight
+// Apps Script doGet can also handle write operations this way
+async function gsWrite(payload){
+  if(!GS_URL) return false;
   try{
-    await fetch(GS_URL, {
-      method:'POST', mode:'no-cors',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({action, sheet, row, id})
-    });
-    setSyncStatus('ok');
-  }catch(e){ setSyncStatus('error'); }
+    // Encode the payload as a query param — Apps Script reads it in doGet
+    const url = GS_URL + (GS_URL.includes('?')?'&':'?')
+      + 'payload=' + encodeURIComponent(JSON.stringify(payload))
+      + '&cb=' + Date.now();
+    const r = await fetch(url, { cache:'no-store' });
+    const d = await r.json();
+    return d.ok === true;
+  }catch(e){ return false; }
+}
+
+// Queue a write — saves locally immediately, flushes async
+function gsPost(action, sheet, row, id){
+  if(!GS_URL) return;
+  const job = { action, sheet, row, id, ts: Date.now(), retries: 0 };
+  syncQueue.push(job);
+  saveQueue();
+  setSyncStatus('pending');
+  flushQueue();
+}
+
+// Process queue one job at a time with retry logic
+async function flushQueue(){
+  if(isSyncing || !syncQueue.length || !GS_URL) return;
+  isSyncing = true;
+  setSyncStatus('syncing');
+
+  while(syncQueue.length > 0){
+    const job = syncQueue[0];
+    const ok = await gsWrite(job);
+    if(ok){
+      syncQueue.shift(); // remove successful job
+      saveQueue();
+    } else {
+      job.retries = (job.retries||0) + 1;
+      saveQueue();
+      if(job.retries >= 5){
+        // give up on this job after 5 tries, move on
+        syncQueue.shift();
+        saveQueue();
+        toast('⚠️ One write failed after 5 retries — check your Sheets connection');
+      } else {
+        // wait before retrying: 2s, 4s, 8s, 16s, 32s
+        const wait = Math.pow(2, job.retries) * 1000;
+        setSyncStatus('error');
+        await new Promise(r=>setTimeout(r, wait));
+      }
+    }
+  }
+
+  isSyncing = false;
+  setSyncStatus(syncQueue.length ? 'pending' : 'ok');
+}
+
+// Auto-pull from Sheets every 30s to catch changes made on other devices
+function startAutoSync(){
+  if(autoSyncTimer) clearInterval(autoSyncTimer);
+  if(!GS_URL) return;
+  autoSyncTimer = setInterval(async ()=>{
+    if(syncQueue.length === 0){ // only pull if no pending writes
+      const data = await gsGet();
+      if(data){ ingestSheetData(data); renderPage(curPage); }
+    }
+  }, 30000);
 }
 
 async function testConnection(){
   const el = document.getElementById('gs-status');
-  el.innerHTML='<span style="color:var(--amber);">Testing…</span>';
+  el.innerHTML='<span style="color:var(--amber);">Testing connection…</span>';
   const data = await gsGet();
   if(data){
     el.innerHTML='<span style="color:var(--green);">✅ Connected! Loading your data…</span>';
     ingestSheetData(data);
     renderDashboard();
+    startAutoSync();
     toast('✅ Connected to Google Sheets!');
   } else {
-    el.innerHTML='<span style="color:var(--red);">❌ Could not connect. Check the URL and make sure "Anyone" can access the deployment.</span>';
+    el.innerHTML='<span style="color:var(--red);">❌ Could not connect. Make sure:<br>1. "Who has access" is set to <strong>Anyone</strong><br>2. You deployed a <strong>New version</strong> after any script changes</span>';
   }
 }
 
@@ -697,7 +779,35 @@ function ingestSheetData(data){
 
 async function fullSync(){
   const data = await gsGet();
-  if(data){ ingestSheetData(data); renderPage(curPage); }
+  if(data){
+    ingestSheetData(data);
+    renderPage(curPage);
+    toast('✅ Data refreshed from Google Sheets');
+  } else {
+    toast('❌ Could not reach Google Sheets');
+  }
+}
+
+async function manualSync(){
+  if(!GS_URL){ toast('⚠️ No Google Sheets URL set — go to Settings'); return; }
+  toast('🔄 Syncing…');
+  // First flush any pending writes
+  await flushQueue();
+  // Then pull latest
+  const data = await gsGet();
+  if(data){ ingestSheetData(data); renderPage(curPage); toast('✅ Synced!'); }
+  else toast('❌ Sync failed — check your connection');
+}
+
+function updateQueueDisplay(){
+  const el = document.getElementById('queue-status');
+  if(!el) return;
+  if(syncQueue.length > 0){
+    el.style.display = 'block';
+    el.textContent = `⏳ ${syncQueue.length} write(s) pending — will retry automatically`;
+  } else {
+    el.style.display = 'none';
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1144,10 +1254,12 @@ applyRecurring(mk());
 renderDashboard();
 checkAlerts();
 
-// If URL already saved, pull data from Sheets on load
 if(GS_URL){
-  setSyncStatus('syncing');
-  fullSync();
+  // Flush any writes that were queued but not sent last session
+  if(syncQueue.length){ setSyncStatus('pending'); flushQueue(); }
+  // Pull latest data from Sheets on load
+  gsGet().then(data=>{ if(data){ ingestSheetData(data); renderDashboard(); } });
+  startAutoSync();
 } else {
   setSyncStatus('none');
 }
