@@ -140,6 +140,8 @@ label{font-size:12px;font-weight:700;color:var(--ink-2);display:block;margin-bot
 .btn-primary:active{transform:scale(.97);}
 .btn-ghost{background:var(--surface);color:var(--ink-2);border:1.5px solid var(--border);}
 .btn-ghost:hover{background:var(--border);}
+.btn-danger{background:var(--red-light);color:var(--red);border:1.5px solid #ffd0d0;}
+.btn-danger:hover{background:#ffd0d0;}
 .btn-sm{padding:5px 12px;font-size:12px;}
 .btn-icon{padding:7px;border-radius:8px;background:none;border:1px solid var(--border);cursor:pointer;color:var(--ink-3);}
 .btn-icon:hover{background:var(--red-light);color:var(--red);border-color:var(--red);}
@@ -470,7 +472,13 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-ghost btn-sm" onclick="exportData()"><i class="ti ti-download"></i>Export JSON backup</button>
           <label class="btn btn-ghost btn-sm" style="cursor:pointer;"><i class="ti ti-upload"></i>Import JSON backup<input type="file" accept=".json" style="display:none;" onchange="importData(this)"/></label>
+          <button class="btn btn-danger btn-sm" onclick="clearLocalCache()"><i class="ti ti-trash"></i>Clear local cache</button>
         </div>
+        <p style="font-size:12px;color:var(--ink-3);margin-top:8px;">If the savings goal shows wrong numbers, tap "Clear local cache" then reload — data will re-sync from Google Sheets.</p>
+        <div class="divider"></div>
+        <div style="font-size:13px;font-weight:700;margin-bottom:8px;">🔍 Savings Debug</div>
+        <button class="btn btn-ghost btn-sm" onclick="showDebug()" style="margin-bottom:8px;"><i class="ti ti-bug"></i>Show savings calculation</button>
+        <div id="debug-panel" style="display:none;background:var(--surface);border-radius:var(--radius-sm);padding:12px;font-size:12px;font-family:monospace;line-height:1.8;"></div>
       </div>
     </div>
 
@@ -551,26 +559,30 @@ function L6(){ const r=[];for(let i=5;i>=0;i--){let m=curMonth-i,y=curYear;if(m<
 // Savings tracking strictly starts Jun 2026 — pre-Jun data is for records only
 const START_MONTH = '2026-06';
 
-function monthIncome(k){ return SALARY+(getInc(k)).reduce((s,e)=>s+e.amount,0); }
-function monthTotal(k){  return getExp(k).reduce((s,e)=>s+e.amount,0); }
+function monthIncome(k){
+  if(k < START_MONTH) return 0; // pre-Jun: no salary counted, records only
+  return SALARY+(getInc(k)).reduce((s,e)=>s+e.amount,0);
+}
+function monthTotal(k){ return getExp(k).reduce((s,e)=>s+e.amount,0); }
 function monthSaved(k){
-  // Pre-Jun 2026: never count toward savings, just show income-expense for display
-  if(k < START_MONTH) return 0;
-  // Jun 2026 onwards: always calculate (current month always live)
+  const curKey = mkey(new Date().getFullYear(), new Date().getMonth());
+  if(k < START_MONTH) return 0; // pre-Jun: excluded from savings
+  if(k > curKey) return 0;      // future months: never count
   return monthIncome(k) - monthTotal(k);
 }
 function savingsRate(k){
-  if(k < START_MONTH) return 0;
+  const curKey = mkey(new Date().getFullYear(), new Date().getMonth());
+  if(k < START_MONTH || k > curKey) return 0;
   const i=monthIncome(k); return i>0?Math.round(monthSaved(k)/i*100):0;
 }
 
 function activeMonths(){
-  // Only months from Jun 2026 onwards that have any expense data at all
   const curKey = mkey(new Date().getFullYear(), new Date().getMonth());
   return Object.keys(expenses).filter(k => {
     if(k < START_MONTH) return false; // hard cutoff — never count pre-Jun
+    if(k > curKey) return false;      // never count future months
     if(k === curKey) return true;     // always include current month
-    return expenses[k].some(e=>!e.recurringId); // future/past months need real entries
+    return expenses[k].some(e=>!e.recurringId); // past months need real entries
   });
 }
 function allTimeSaved(){ const ks=activeMonths(); return ks.length?ks.reduce((t,k)=>t+monthSaved(k),0):0; }
@@ -753,6 +765,7 @@ function ingestSheetData(data){
     const amt = parseFloat(r.amount)||0;
     const[y,m] = r.date.split('-').map(Number);
     const k = mkey(y,m-1);
+    // Store ALL months for display, but tag pre-Jun entries
     if(!expenses[k]) expenses[k]=[];
     expenses[k].push({id:String(r.id),date:r.date,desc:r.desc,cat:r.cat,type:r.type,amount:amt,endDate:r.endDate||'',recurringId:r.recurringId||'',period:r.period||'monthly'});
   });
@@ -768,7 +781,6 @@ function ingestSheetData(data){
   (data.Recurring||[]).forEach(r=>{
     recurring.push({id:String(r.id),desc:r.desc,cat:r.cat,amount:parseFloat(r.amount)||0,endDate:r.endDate||''});
   });
-  // If sheet has no recurring yet, keep defaults (they'll be written on first sync)
   if(!recurring.length){
     recurring=[
       {id:rid(),desc:'Rent',cat:'Housing',amount:16000,endDate:''},
@@ -777,7 +789,6 @@ function ingestSheetData(data){
       {id:rid(),desc:'Gym membership',cat:'Health',amount:600,endDate:''},
       {id:rid(),desc:'Dog Food',cat:'Dog',amount:500,endDate:''},
     ];
-    // write defaults to sheet
     recurring.forEach(r=>gsPost('append','Recurring',r,null));
   }
 }
@@ -885,6 +896,7 @@ function updateMonthLabel(){
 // RECURRING — apply to current month
 // ═══════════════════════════════════════════════════════════
 function applyRecurring(k){
+  if(k < START_MONTH) return; // never apply recurring to pre-Jun months
   if(!expenses[k]) expenses[k]=[];
   const now=new Date(curYear,curMonth,1);
   recurring.forEach(r=>{
@@ -1229,6 +1241,39 @@ function parsePaste(){
 }
 
 // ─── EXPORT / IMPORT JSON ────────────────────────────────
+function clearLocalCache(){
+  if(!confirm('This clears all locally cached expense data and reloads from Google Sheets. Your Google Sheet data is safe. Continue?')) return;
+  expenses = {}; incomes = {}; syncQueue = [];
+  localStorage.removeItem('jft_queue');
+  toast('🗑️ Cache cleared — resyncing from Sheets…');
+  if(GS_URL){ setTimeout(()=>{ gsGet().then(data=>{ if(data){ ingestSheetData(data); renderDashboard(); toast('✅ Resynced!'); }}); }, 500); }
+  else { renderDashboard(); }
+}
+
+function showDebug(){
+  const panel = document.getElementById('debug-panel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  if(panel.style.display === 'none') return;
+
+  const allKeys = Object.keys(expenses).sort();
+  let html = `<strong>START_MONTH:</strong> ${START_MONTH}<br>`;
+  html += `<strong>GOAL_START:</strong> ${fmt(GOAL_START)}<br>`;
+  html += `<strong>allTimeSaved():</strong> ${fmt(allTimeSaved())}<br>`;
+  html += `<strong>Total shown:</strong> ${fmt(GOAL_START + allTimeSaved())}<br>`;
+  html += `<strong>activeMonths():</strong> ${activeMonths().join(', ')||'none'}<br><br>`;
+  html += `<strong>All months in memory:</strong><br>`;
+  allKeys.forEach(k=>{
+    const inc = monthIncome(k);
+    const exp = monthTotal(k);
+    const sv = monthSaved(k);
+    const entries = (expenses[k]||[]).length;
+    const preJun = k < START_MONTH;
+    html += `${preJun?'<span style="color:var(--red)">':'<span style="color:var(--green)">'}`
+      + `${k}: ${entries} entries | income=${fmt(inc)} | exp=${fmt(exp)} | saved=${fmt(sv)}${preJun?' [PRE-JUN — excluded]':''}</span><br>`;
+  });
+  if(!allKeys.length) html += 'No expense data in memory.<br>';
+  panel.innerHTML = html;
+}
 function exportData(){
   const blob=new Blob([JSON.stringify({expenses,incomes,recurring},null,2)],{type:'application/json'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='joyce-fintrack-backup.json'; a.click();
