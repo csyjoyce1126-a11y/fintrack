@@ -118,6 +118,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .cat-Health{background:#ffedd5;color:#9a3412;}
 .cat-Shopping{background:#e0f2fe;color:#075985;}
 .cat-Beauty{background:#fdf2f8;color:#86198f;}
+.cat-Travel{background:#e0f7fa;color:#00695c;}
 .cat-Utilities{background:#f1f5f9;color:#475569;}
 .cat-Business{background:#dcfce7;color:#14532d;}
 .cat-Tax{background:#fee2e2;color:#7f1d1d;}
@@ -314,7 +315,7 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
               <option>Housing</option><option>Transport</option><option>Dog</option>
               <option>Subscription</option><option>Food</option><option>Groceries</option>
               <option>Entertainment</option><option>Health</option><option>Shopping</option>
-              <option>Beauty</option><option>Utilities</option><option>Business</option>
+              <option>Beauty</option><option>Travel</option><option>Utilities</option><option>Business</option>
               <option>Tax</option><option>Insurance</option><option>Other</option>
             </select>
           </div>
@@ -346,7 +347,7 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
               <option>Housing</option><option>Transport</option><option>Dog</option>
               <option>Subscription</option><option>Food</option><option>Groceries</option>
               <option>Entertainment</option><option>Health</option><option>Shopping</option>
-              <option>Beauty</option><option>Utilities</option><option>Business</option>
+              <option>Beauty</option><option>Travel</option><option>Utilities</option><option>Business</option>
               <option>Tax</option><option>Insurance</option><option>Other</option>
             </select>
           </div>
@@ -399,7 +400,7 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
               <option>Housing</option><option>Transport</option><option>Dog</option>
               <option>Subscription</option><option>Food</option><option>Groceries</option>
               <option>Utilities</option><option>Health</option><option>Beauty</option>
-              <option>Insurance</option><option>Other</option>
+              <option>Insurance</option><option>Travel</option><option>Other</option>
             </select>
           </div>
           <div><label>End date (optional)</label><input type="date" id="r-enddate"/></div>
@@ -817,7 +818,7 @@ const CAT_COLORS={
   Housing:'#5b5ef4',Transport:'#3b82f6',Dog:'#f97316',Subscription:'#9333ea',
   Food:'#22c55e',Groceries:'#10b981',Entertainment:'#ec4899',Health:'#ef4444',
   Shopping:'#0ea5e9',Beauty:'#d946ef',Utilities:'#64748b',Business:'#16a34a',
-  Tax:'#dc2626',Insurance:'#1d4ed8',Other:'#9ca3af'
+  Tax:'#dc2626',Insurance:'#1d4ed8',Travel:'#00897b',Other:'#9ca3af'
 };
 const RULES=[
   {cat:'Housing',   fixed:true, kw:['rent','rental','mortgage','管理費','property management','管理公司','home insurance','屋租','租金','房租','rates','landlord']},
@@ -834,6 +835,7 @@ const RULES=[
   {cat:'Business',  fixed:false,kw:['office','supply','supplies','client','invoice','business','cowork','stationery','printing','courier','fedex','dhl']},
   {cat:'Tax',       fixed:false,kw:['tax','ird','inland revenue','stamp duty','salaries tax','稅']},
   {cat:'Insurance', fixed:true, kw:['insurance','insure','policy','premium','life insurance','medical insurance','aia','prudential','manulife','保險']},
+  {cat:'Travel',    fixed:false,kw:['hotel','airbnb','airfare','airline','airport','cathay','hkexpress','air asia','scoot','flight','booking.com','agoda','expedia','trip.com','klook','ferry terminal','immigration','visa','旅遊','機票','酒店','bali','lombok','indonesia','thailand','japan','korea','taiwan','singapore','malaysia','beach','resort','hostel','motel','kkday']},
 ];
 function autoCat(desc){ const low=desc.toLowerCase(); for(const r of RULES) if(r.kw.some(k=>low.includes(k))) return{cat:r.cat,fixed:r.fixed}; return{cat:'Other',fixed:false}; }
 
