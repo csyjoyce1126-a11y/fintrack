@@ -199,8 +199,7 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
   .month-label{min-width:70px;font-size:12px;}
   .month-btn{padding:4px 9px;font-size:13px;}
   #sync-label{display:none;}
-  .setup-banner{border-radius:10px;padding:12px 14px;}
-  .setup-banner .setup-step{font-size:12px;}
+  .setup-banner{display:none !important;}
   .chart-wrap canvas{max-height:180px;}
 }
 @media(min-width:701px){
@@ -547,10 +546,20 @@ function catPill(cat){ return `<span class="pill cat-${cat}">${cat}</span>`; }
 function L6(){ const r=[];for(let i=5;i>=0;i--){let m=curMonth-i,y=curYear;if(m<0){m+=12;y--;}r.push(mkey(y,m));}return r; }
 function monthIncome(k){ return SALARY+(getInc(k)).reduce((s,e)=>s+e.amount,0); }
 function monthTotal(k){  return getExp(k).reduce((s,e)=>s+e.amount,0); }
-function monthSaved(k){  return monthIncome(k)-monthTotal(k); }
+function monthSaved(k){
+  // Only calculate savings for months that have at least one real expense entered
+  const hasReal = k>=START_MONTH && (getExp(k).some(e=>!e.recurringId)||getInc(k).length>0);
+  if(!hasReal) return 0;
+  return monthIncome(k)-monthTotal(k);
+}
 function savingsRate(k){ const i=monthIncome(k);return i>0?Math.round(monthSaved(k)/i*100):0; }
-function allTimeSaved(){ return Object.keys(expenses).reduce((t,k)=>t+monthSaved(k),0); }
-function avgMonthlySaved(){ const ks=Object.keys(expenses);if(!ks.length)return MONTHLY_TARGET;return Math.round(ks.reduce((s,k)=>s+monthSaved(k),0)/ks.length); }
+// Only count months from Jun 2026 that have at least one real (non-recurring) entry
+const START_MONTH = '2026-06';
+function activeMonths(){
+  return Object.keys(expenses).filter(k=>k>=START_MONTH && expenses[k].some(e=>!e.recurringId));
+}
+function allTimeSaved(){ const ks=activeMonths(); return ks.length?ks.reduce((t,k)=>t+monthSaved(k),0):0; }
+function avgMonthlySaved(){ const ks=activeMonths();if(!ks.length)return MONTHLY_TARGET;return Math.round(ks.reduce((s,k)=>s+monthSaved(k),0)/ks.length); }
 function dc(id){ if(charts[id]){charts[id].destroy();delete charts[id];} }
 
 function toast(msg, dur=2500){
